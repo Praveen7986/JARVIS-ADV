@@ -1,429 +1,1057 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
-import {
-  Activity,
-  AlertTriangle,
-  ArrowRight,
-  Bell,
-  BrainCircuit,
-  CalendarDays,
-  Check,
-  ChevronDown,
-  CirclePause,
-  Clock3,
-  Cpu,
-  ExternalLink,
-  Gauge,
-  Globe2,
-  Headphones,
-  Layers3,
-  LayoutGrid,
-  MessageSquare,
-  Mic2,
-  MoreHorizontal,
-  MoveUpRight,
-  Pause,
-  Play,
-  Radio,
-  RotateCcw,
-  Send,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Star,
-  TerminalSquare,
-  Volume2,
-  X,
-  Zap,
-} from "lucide-react";
+import React, { useEffect, useRef, useState } from "react";
+import { useLocation } from "wouter";
+import { trpc } from "@/lib/trpc";
 
-type Priority = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-type Phase = "RESTING" | "DETECTED" | "ACTIVATING" | "EXPANDING" | "PRESENTING" | "DELIVERED" | "CONTRACTING";
-type SectionId = "world" | "technology" | "science" | "finance" | "projects" | "messages" | "calls" | "schedule";
+const WELCOME_SPEECH =
+  "Welcome. I am JARVIS, your personal assistant. Is there anything for me to do, or what about your day and your plans?";
 
-type AttentionEvent = {
-  id: string;
-  section: SectionId;
-  title: string;
-  summary: string;
-  source: string;
-  age: string;
-  priority: Priority;
-  relevance: number;
-  urgency: number;
-  context: string;
-  accent: string;
-  icon: typeof Globe2;
-};
-
-const phaseOrder: Phase[] = [
-  "RESTING",
-  "DETECTED",
-  "ACTIVATING",
-  "EXPANDING",
-  "PRESENTING",
-  "DELIVERED",
-  "CONTRACTING",
-];
-
-const sectionMeta: Record<SectionId, { label: string; short: string; icon: typeof Globe2 }> = {
-  world: { label: "World", short: "Global signal", icon: Globe2 },
-  technology: { label: "Technology", short: "Frontier watch", icon: Cpu },
-  science: { label: "Science", short: "Research pulse", icon: Sparkles },
-  finance: { label: "Finance", short: "Market context", icon: Activity },
-  projects: { label: "Projects", short: "Workstream", icon: Layers3 },
-  messages: { label: "Messages", short: "Communications", icon: MessageSquare },
-  calls: { label: "Calls", short: "Availability", icon: Headphones },
-  schedule: { label: "Schedule", short: "Time horizon", icon: CalendarDays },
-};
-
-const eventSeed: AttentionEvent[] = [
-  {
-    id: "tech-gpt5",
-    section: "technology",
-    title: "OpenAI announces GPT-5",
-    summary: "OpenAI has announced GPT-5 with major gains in reasoning, multimodal capabilities, and real-time agent tools.",
-    source: "The Verge / 2 min read",
-    age: "just now",
-    priority: "HIGH",
-    relevance: 94,
-    urgency: 72,
-    context: "Matches your AI research watchlist",
-    accent: "#74b9ff",
-    icon: Cpu,
-  },
-  {
-    id: "world-japan",
-    section: "world",
-    title: "Major earthquake strikes Japan",
-    summary: "A 6.8 magnitude earthquake has struck off Japan's coast, prompting tsunami advisories in nearby regions.",
-    source: "Reuters / 4 min read",
-    age: "2 min ago",
-    priority: "CRITICAL",
-    relevance: 81,
-    urgency: 98,
-    context: "Safety signal; awaiting delivery after current briefing",
-    accent: "#b79cff",
-    icon: Globe2,
-  },
-  {
-    id: "science-mars",
-    section: "science",
-    title: "New sample analysis from Mars",
-    summary: "A new analysis suggests ancient water activity persisted longer than previous models indicated.",
-    source: "Nature / 8 min read",
-    age: "12 min ago",
-    priority: "MEDIUM",
-    relevance: 76,
-    urgency: 34,
-    context: "Aligned with your space briefings",
-    accent: "#8fe0bd",
-    icon: Sparkles,
-  },
-];
-
-const priorityRank: Record<Priority, number> = { LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 };
-
-function scoreEvent(event: AttentionEvent) {
-  return Math.round(event.relevance * 0.45 + event.urgency * 0.35 + priorityRank[event.priority] * 5);
-}
-
-function PhasePill({ phase }: { phase: Phase }) {
-  const labels: Record<Phase, string> = {
-    RESTING: "Resting",
-    DETECTED: "Event detected",
-    ACTIVATING: "Activating",
-    EXPANDING: "Organic expansion",
-    PRESENTING: "Presenting",
-    DELIVERED: "Delivered",
-    CONTRACTING: "Returning to rest",
-  };
-  return (
-    <span className={`phase-pill phase-pill--${phase.toLowerCase()}`}>
-      <span className="phase-pill__dot" />
-      {labels[phase]}
-    </span>
-  );
-}
-
-function PriorityBadge({ priority }: { priority: Priority }) {
-  return <span className={`priority priority--${priority.toLowerCase()}`}>{priority}</span>;
-}
-
-function WaveMark({ active }: { active: boolean }) {
-  return (
-    <svg className={`wave-mark ${active ? "wave-mark--active" : ""}`} viewBox="0 0 260 46" fill="none" aria-hidden="true">
-      <path d="M2 31C33 31 37 31 55 31C78 31 78 7 108 7C137 7 132 31 159 31C183 31 187 31 207 31C231 31 234 21 258 21" />
-    </svg>
-  );
-}
-
-function SectionCard({
-  section,
-  active,
-  currentEvent,
-  phase,
-  onActivate,
-}: {
-  section: SectionId;
+interface JarvisOrbProps {
   active: boolean;
-  currentEvent?: AttentionEvent;
-  phase: Phase;
-  onActivate: (section: SectionId) => void;
-}) {
-  const meta = sectionMeta[section];
-  const Icon = meta.icon;
-  const showingContent = active && ["EXPANDING", "PRESENTING", "DELIVERED"].includes(phase);
-
-  return (
-    <button
-      type="button"
-      className={`section-card ${active ? "section-card--active" : ""} section-card--${phase.toLowerCase()}`}
-      onClick={() => onActivate(section)}
-      aria-pressed={active}
-    >
-      {active && <WaveMark active />}
-      <div className="section-card__top">
-        <div className="section-card__identity">
-          <span className="section-icon"><Icon size={16} strokeWidth={1.7} /></span>
-          <span>
-            <strong>{meta.label}</strong>
-            <small>{meta.short}</small>
-          </span>
-        </div>
-        <div className="section-card__state">
-          {active ? <PhasePill phase={phase} /> : <span className="resting-dot"><span /> Calm</span>}
-          <MoreHorizontal size={16} />
-        </div>
-      </div>
-      <div className="section-card__body">
-        {showingContent && currentEvent ? (
-          <div className="section-card__content">
-              <div className="signal-visual" style={{ "--signal-accent": currentEvent.accent } as CSSProperties}>
-              <div className="signal-grid" />
-              <Icon size={32} strokeWidth={1.2} />
-              <span>LIVE SIGNAL</span>
-            </div>
-            <div className="section-card__copy">
-              <div className="section-card__eyebrow"><span>Attention surfaced</span><PriorityBadge priority={currentEvent.priority} /></div>
-              <h3>{currentEvent.title}</h3>
-              <p>{currentEvent.summary}</p>
-              <div className="card-actions">
-                <span className="read-link">Open briefing <ArrowRight size={13} /></span>
-                <span className="save-link"><Star size={12} /> Watch</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="resting-copy">
-            <span className="resting-time">09:24 <small>AM</small></span>
-            <span className="resting-note">No new signal<br /><em>surface is calm</em></span>
-          </div>
-        )}
-      </div>
-      <div className="section-card__footer">
-        <span>{active && currentEvent ? currentEvent.source : "Monitoring · context-aware"}</span>
-        <span className="footer-chevron"><ChevronDown size={13} /></span>
-      </div>
-    </button>
-  );
+  speaking: boolean;
+  level: number;
+  bass: number;
+  treble: number;
 }
 
-function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
+export function JarvisOrb({ active, speaking, level, bass, treble }: JarvisOrbProps) {
   return (
-    <div className="score-row">
-      <div className="score-label"><span>{label}</span><strong>{value}%</strong></div>
-      <div className="score-track"><span style={{ width: `${value}%`, background: color }} /></div>
+    <div
+      className={`jarvis-orb ${active ? "jarvis-orb--active" : ""} ${speaking ? "jarvis-orb--speaking" : ""}`}
+      style={{
+        ["--voice-level" as any]: level.toFixed(3),
+        ["--voice-bass" as any]: bass.toFixed(3),
+        ["--voice-treble" as any]: treble.toFixed(3),
+      }}
+      aria-label="JARVIS holographic visualizer"
+      role="img"
+    >
+      <div className="orb-shadow" />
+      <div className="orb-halo orb-halo--outer" />
+      <div className="orb-halo orb-halo--inner" />
+      <div className="orb-rings">
+        {Array.from({ length: 15 }).map((_, i) => (
+          <span key={i} className="orb-ring" style={{ ["--i" as any]: i }} />
+        ))}
+      </div>
+      <div className="orb-grid orb-grid--vertical" />
+      <div className="orb-grid orb-grid--horizontal" />
+      <div className="orb-core">
+        <div className="orb-core-lens" />
+        <div className="orb-core-pulse" />
+      </div>
+      <div className="orb-particles">
+        {Array.from({ length: 20 }).map((_, i) => (
+          <span key={i} style={{ ["--i" as any]: i }} />
+        ))}
+      </div>
+      <div className="orb-scanline" />
     </div>
   );
 }
 
+interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  topicImages?: { url: string; thumbnailUrl: string; title: string }[];
+}
+
+interface NewsArticle {
+  title: string;
+  link: string;
+  source: string;
+}
+
+interface SourceLink {
+  title: string;
+  url: string;
+  source: string;
+}
+
 export default function Home() {
-  const [events, setEvents] = useState<AttentionEvent[]>(eventSeed);
-  const [activeEventId, setActiveEventId] = useState(eventSeed[0].id);
-  const [phase, setPhase] = useState<Phase>("PRESENTING");
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [toast, setToast] = useState("Attention Manager is observing");
-  const [activeNav, setActiveNav] = useState<SectionId>("technology");
-  const [command, setCommand] = useState("");
+  const [, setLocation] = useLocation();
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [interimText, setInterimText] = useState("");
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [level, setLevel] = useState(0);
+  const [bass, setBass] = useState(0);
+  const [treble, setTreble] = useState(0);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [showWakePrompt, setShowWakePrompt] = useState(false);
+  const [inputText, setInputText] = useState("");
+  const [isInputFocused, setIsInputFocused] = useState(false);
+  const [newsArticles, setNewsArticles] = useState<NewsArticle[] | null>(null);
+  const [showNewsBriefing, setShowNewsBriefing] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraStatus, setCameraStatus] = useState("Camera gestures off");
+  const [screenActive, setScreenActive] = useState(false);
+  const [screenStatus, setScreenStatus] = useState("Screen access off");
+  const [sourceLinks, setSourceLinks] = useState<SourceLink[]>([]);
+  const [selectedResponse, setSelectedResponse] = useState<ChatMessage | null>(null);
 
-  const activeEvent = events.find((event) => event.id === activeEventId) ?? eventSeed[0];
-  const queuedEvents = events.filter((event) => event.id !== activeEventId).sort((a, b) => scoreEvent(b) - scoreEvent(a));
-  const activeSection = activeEvent.section;
-  const phaseIndex = phaseOrder.indexOf(phase);
+  const quickPrompts = [
+    { label: "🔥 Today's Hot Topics", query: "What is the hot topic news today?" },
+    { label: "🧭 For You", query: "Give me recent worldwide breaking news about my interests." },
+    { label: "💻 Tech Headlines", query: "What are today's tech news headlines?" },
+    { label: "🌐 World News", query: "What is happening in world news today?" },
+    { label: "🚀 Science & Space", query: "What is the latest science and space news?" },
+  ];
 
-  const currentReason = useMemo(() => {
-    if (phase === "RESTING") return "No section currently requires interruption.";
-    if (phase === "DETECTED") return "The Event Bus received a new signal.";
-    if (phase === "CONTRACTING") return "Delivery complete; returning the surface to calm.";
-    return activeEvent.context;
-  }, [activeEvent.context, phase]);
+  const isListeningRef = useRef(false);
+  const isSpeakingRef = useRef(false);
+  const isPendingRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const transcriptBufferRef = useRef("");
+  const recognitionRef = useRef<any>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const animFrameRef = useRef<number | null>(null);
+  const hasInitializedRef = useRef(false);
+  const speechTimeoutRef = useRef<any>(null);
+  const finalTranscriptRef = useRef("");
+  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const captionScrollRef = useRef<HTMLDivElement | null>(null);
+  const captionEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const dynamicsRef = useRef({ level: 0, bass: 0, treble: 0 });
+
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
+  const screenActiveRef = useRef(false);
+  const screenAutoAnalyzedRef = useRef(false);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraAnimRef = useRef<number | null>(null);
+  const prevFrameRef = useRef<Uint8ClampedArray | null>(null);
+  const lastGestureTimeRef = useRef(0);
+  const prevMsgCountRef = useRef(0);
+
+  const chatMutation = trpc.jarvis.chat.useMutation();
+  const isPending = chatMutation.isPending;
 
   useEffect(() => {
-    if (!isPlaying || isPaused) return;
-    const timer = window.setInterval(() => {
-      setPhase((current) => {
-        const index = phaseOrder.indexOf(current);
-        if (index >= phaseOrder.length - 1) {
-          setIsPlaying(false);
-          return "RESTING";
-        }
-        return phaseOrder[index + 1];
-      });
-    }, 1050);
-    return () => window.clearInterval(timer);
-  }, [isPlaying, isPaused]);
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
-    if (phase !== "RESTING") return;
-    const timer = window.setTimeout(() => {
-      const next = queuedEvents[0];
-      if (next) {
-        setActiveEventId(next.id);
-        setActiveNav(next.section);
-        setPhase("DETECTED");
-        setToast(`${sectionMeta[next.section].label} promoted by priority engine`);
+    isPendingRef.current = isPending;
+  }, [isPending]);
+
+  const stopMicrophone = () => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    animFrameRef.current = null;
+    analyserRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+    if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+      audioContextRef.current.close().catch(() => {});
+    }
+    audioContextRef.current = null;
+  };
+
+  const startMicrophone = async () => {
+    if (!analyserRef.current && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        if (ctx.state === "suspended") await ctx.resume();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.75;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        mediaStreamRef.current = stream;
+        audioContextRef.current = ctx;
+        analyserRef.current = analyser;
+      } catch {}
+    }
+  };
+
+  useEffect(() => {
+    const dataArray = new Uint8Array(128);
+    const updateAudioMeter = () => {
+      if (isListeningRef.current && analyserRef.current) {
+        analyserRef.current.getByteFrequencyData(dataArray);
+        let bassSum = 0;
+        for (let i = 1; i <= 8; i++) bassSum += dataArray[i];
+        const bassVal = Math.min(1, (bassSum / 2040) * 2.2);
+
+        let trebleSum = 0;
+        for (let i = 16; i <= 48; i++) trebleSum += dataArray[i];
+        const trebleVal = Math.min(1, (trebleSum / 8160) * 2.5);
+
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        const avg = sum / dataArray.length;
+        const levelVal = Math.min(1, (avg / 255) * 3.2);
+
+        setLevel((prev) => prev * 0.4 + levelVal * 0.6);
+        setBass((prev) => prev * 0.4 + bassVal * 0.6);
+        setTreble((prev) => prev * 0.4 + trebleVal * 0.6);
+      } else if (isSpeakingRef.current) {
+        const now = performance.now();
+        const baseLevel = dynamicsRef.current.level;
+        const w1 = Math.sin(now / 85) * 0.28;
+        const w2 = Math.sin(now / 145) * 0.22;
+        const w3 = Math.cos(now / 48) * 0.16;
+        const dynamicLevel = Math.max(0, Math.min(1, baseLevel + w1 + w2 + w3));
+        const dynamicBass = Math.max(0, Math.min(1, dynamicLevel * 0.85 + Math.sin(now / 110) * 0.2));
+        const dynamicTreble = Math.max(0, Math.min(1, dynamicLevel * 0.95 + Math.cos(now / 60) * 0.25));
+        setLevel(dynamicLevel);
+        setBass(dynamicBass);
+        setTreble(dynamicTreble);
+      } else {
+        setLevel((p) => (p > 0.01 ? p * 0.85 : 0));
+        setBass((p) => (p > 0.01 ? p * 0.85 : 0));
+        setTreble((p) => (p > 0.01 ? p * 0.85 : 0));
       }
-    }, 900);
-    return () => window.clearTimeout(timer);
-  }, [phase, queuedEvents]);
+      animFrameRef.current = requestAnimationFrame(updateAudioMeter);
+    };
 
-  const startSequence = () => {
-    setIsPaused(false);
-    setIsPlaying(true);
-    setPhase("DETECTED");
-    setToast("Attention Manager is sequencing the next delivery");
-  };
+    animFrameRef.current = requestAnimationFrame(updateAudioMeter);
+    return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
 
-  const resetSequence = () => {
-    setIsPlaying(false);
-    setIsPaused(false);
-    setActiveEventId(eventSeed[0].id);
-    setActiveNav("technology");
-    setPhase("RESTING");
-    setToast("All sections returned to resting state");
-  };
+  useEffect(() => {
+    if (messages.length === prevMsgCountRef.current) return;
+    prevMsgCountRef.current = messages.length;
+    const frame = requestAnimationFrame(() => {
+      captionScrollRef.current?.scrollTo({
+        top: captionScrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [messages.length]);
 
-  const activateSection = (section: SectionId) => {
-    const event = events.find((candidate) => candidate.section === section);
-    setActiveNav(section);
-    if (!event) {
-      setToast(`${sectionMeta[section].label} is calm — no relevant signal in queue`);
+  const speakText = (text: string, restartListening = true) => {
+    if (!("speechSynthesis" in window)) {
+      if (restartListening) setTimeout(() => void startListening(), 400);
       return;
     }
-    setActiveEventId(event.id);
-    setPhase("EXPANDING");
-    setIsPlaying(false);
-    setToast(`${sectionMeta[section].label} activated manually for inspection`);
-  };
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    } catch {}
 
-  const injectEvent = () => {
-    const next: AttentionEvent = {
-      id: `injected-${Date.now()}`,
-      section: "projects",
-      title: "DAI implementation checkpoint ready",
-      summary: "The new attention surface is ready for a review of queue behavior, controls, and responsive states.",
-      source: "JARVIS Projects / now",
-      age: "now",
-      priority: "MEDIUM",
-      relevance: 88,
-      urgency: 48,
-      context: "Generated by the project event source",
-      accent: "#f8c56f",
-      icon: Layers3,
+    const utterance = new SpeechSynthesisUtterance(text);
+    utteranceRef.current = utterance;
+
+    const voices = window.speechSynthesis.getVoices();
+    const jarvisVoice =
+      voices.find((v) => /Google UK English Male|Microsoft George|Daniel|Oliver/i.test(v.name)) ||
+      voices.find((v) => /en-GB/i.test(v.lang) && /male/i.test(v.name)) ||
+      voices.find((v) => /en-GB/i.test(v.lang)) ||
+      voices.find((v) => /en-US/i.test(v.lang)) ||
+      voices[0];
+
+    if (jarvisVoice) utterance.voice = jarvisVoice;
+    utterance.rate = 0.98;
+    utterance.pitch = 0.88;
+    utterance.volume = 1;
+
+    utterance.onboundary = () => {
+      dynamicsRef.current = {
+        level: 0.55 + Math.random() * 0.35,
+        bass: 0.45 + Math.random() * 0.4,
+        treble: 0.5 + Math.random() * 0.35,
+      };
     };
-    setEvents((current) => [...current, next]);
-    setToast("Project event entered the Event Bus");
+
+    utterance.onstart = () => {
+      isSpeakingRef.current = true;
+      setIsSpeaking(true);
+      setShowWakePrompt(false);
+      dynamicsRef.current = { level: 0.65, bass: 0.6, treble: 0.55 };
+    };
+
+    const handleEnd = () => {
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      dynamicsRef.current = { level: 0, bass: 0, treble: 0 };
+      utteranceRef.current = null;
+      if (restartListening) {
+        window.setTimeout(() => {
+          if (!isSpeakingRef.current && !isPendingRef.current) {
+            startListening();
+          }
+        }, 350);
+      }
+    };
+
+    utterance.onend = handleEnd;
+    utterance.onerror = (e) => {
+      console.warn("SpeechSynthesis error:", e);
+      handleEnd();
+    };
+
+    window.setTimeout(() => {
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        console.warn("Autoplay blocked:", e);
+        setShowWakePrompt(true);
+      }
+    }, 40);
   };
 
-  const submitCommand = (event: FormEvent) => {
-    event.preventDefault();
-    if (!command.trim()) return;
-    setToast(`Command routed to Attention Manager: “${command.trim()}”`);
-    setCommand("");
+  const captureScreenFrame = () => {
+    const video = screenVideoRef.current;
+    if (
+      !screenActiveRef.current ||
+      !video ||
+      video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+      !video.videoWidth ||
+      !video.videoHeight
+    ) {
+      return undefined;
+    }
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(1, 960 / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return undefined;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    setScreenStatus("Screen frame captured. JARVIS is inspecting it.");
+    return canvas.toDataURL("image/jpeg", 0.58);
   };
+
+  const handleSendMessage = async (
+    query: string,
+    options: { showUserMessage?: boolean; screenAutoAnalyze?: boolean } = {}
+  ) => {
+    const text = query.trim();
+    if (!text || isPendingRef.current) return;
+
+    if (/^(?:hey\s+)?(?:jarvis\s+)?trace[.!]?$/i.test(text)) {
+      setLocation("/trace");
+      return;
+    }
+
+    const showUserMsg = options.showUserMessage !== false;
+    if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+    finalTranscriptRef.current = "";
+    transcriptBufferRef.current = "";
+    setInterimText("");
+    setErrorMessage("");
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {}
+      recognitionRef.current = null;
+    }
+    isListeningRef.current = false;
+    setIsListening(false);
+
+    const userMsg: ChatMessage = {
+      role: "user",
+      content: text,
+      id: `user-${Date.now()}-${Math.random()}`,
+    };
+
+    const nextMessages = showUserMsg ? [...messagesRef.current, userMsg] : messagesRef.current;
+    const historyForAi = showUserMsg ? nextMessages : [...nextMessages, userMsg];
+
+    if (showUserMsg) {
+      messagesRef.current = nextMessages;
+      setMessages(nextMessages);
+    }
+
+    try {
+      const history = historyForAi.slice(-15).map((m) => ({ role: m.role, content: m.content }));
+      const screenImage = captureScreenFrame();
+
+      const response = await chatMutation.mutateAsync({
+        messages: history,
+        ...(screenImage ? { screenImage } : {}),
+        ...(options.screenAutoAnalyze ? { screenAutoAnalyze: true } : {}),
+      });
+
+      if (response.newsArticles && response.newsArticles.length > 0) {
+        setNewsArticles(response.newsArticles);
+        setShowNewsBriefing(true);
+      }
+      if (response.sourceLinks && response.sourceLinks.length > 0) {
+        setSourceLinks(response.sourceLinks);
+      }
+
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: response.reply,
+        id: `assistant-${Date.now()}-${Math.random()}`,
+        topicImages: response.topicImages,
+      };
+
+      const finalMessages = [...messagesRef.current, assistantMsg];
+      messagesRef.current = finalMessages;
+      setMessages(finalMessages);
+      speakText(response.reply, true);
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : "JARVIS could not connect.";
+      setErrorMessage(msg);
+      isSpeakingRef.current = false;
+      setIsSpeaking(false);
+      window.setTimeout(() => void startListening(), 600);
+    }
+  };
+
+  const stopScreenShare = () => {
+    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
+    screenStreamRef.current = null;
+    screenActiveRef.current = false;
+    screenAutoAnalyzedRef.current = false;
+    if (screenVideoRef.current) screenVideoRef.current.srcObject = null;
+    setScreenActive(false);
+    setScreenStatus("Screen access off");
+  };
+
+  const toggleScreenShare = async () => {
+    if (screenActive) {
+      stopScreenShare();
+      return;
+    }
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setScreenStatus("Screen sharing is not supported in this browser");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      screenStreamRef.current = stream;
+      screenActiveRef.current = true;
+      setScreenActive(true);
+      setScreenStatus("Screen shared. Ask JARVIS what you are looking at.");
+      stream.getVideoTracks()[0].addEventListener("ended", stopScreenShare);
+
+      if (screenVideoRef.current) {
+        screenVideoRef.current.srcObject = stream;
+        await screenVideoRef.current.play();
+      }
+
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+
+      if (screenStreamRef.current === stream && !screenAutoAnalyzedRef.current && !isPendingRef.current) {
+        screenAutoAnalyzedRef.current = true;
+        handleSendMessage("Inspect the shared screen and tell me what it contains.", {
+          showUserMessage: false,
+          screenAutoAnalyze: true,
+        });
+      }
+    } catch {
+      setScreenStatus("Screen access was cancelled");
+    }
+  };
+
+  const stopCameraGestures = () => {
+    if (cameraAnimRef.current) cancelAnimationFrame(cameraAnimRef.current);
+    cameraAnimRef.current = null;
+    cameraStreamRef.current?.getTracks().forEach((t) => t.stop());
+    cameraStreamRef.current = null;
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    prevFrameRef.current = null;
+    setCameraActive(false);
+    setCameraStatus("Camera gestures off");
+  };
+
+  const toggleCameraGestures = async () => {
+    if (cameraActive) {
+      stopCameraGestures();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraStatus("Camera is not supported in this browser");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: 320, height: 240 },
+      });
+      cameraStreamRef.current = stream;
+      setCameraActive(true);
+      setCameraStatus("Show a quick wave left or right");
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+        await cameraVideoRef.current.play();
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 64;
+      canvas.height = 48;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return;
+
+      const processGesture = () => {
+        const video = cameraVideoRef.current;
+        if (!video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+          cameraAnimRef.current = requestAnimationFrame(processGesture);
+          return;
+        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const prev = prevFrameRef.current;
+        if (prev) {
+          let diffPixels = 0;
+          let sumX = 0;
+          for (let i = 0; i < imgData.length; i += 4) {
+            if (Math.abs(imgData[i] - prev[i]) > 35) {
+              const pixelIdx = i / 4;
+              diffPixels += 1;
+              sumX += pixelIdx % canvas.width;
+            }
+          }
+          const now = Date.now();
+          if (diffPixels > 120 && now - lastGestureTimeRef.current > 2200) {
+            const avgX = sumX / diffPixels;
+            const command =
+              avgX < canvas.width * 0.42
+                ? "open calculator"
+                : avgX > canvas.width * 0.58
+                ? "open browser"
+                : "what time is it";
+            lastGestureTimeRef.current = now;
+            setCameraStatus(`Gesture detected: ${command}`);
+            handleSendMessage(command);
+          }
+        }
+        prevFrameRef.current = new Uint8ClampedArray(imgData);
+        cameraAnimRef.current = requestAnimationFrame(processGesture);
+      };
+      cameraAnimRef.current = requestAnimationFrame(processGesture);
+    } catch {
+      setCameraStatus("Camera permission was denied");
+      stopCameraGestures();
+    }
+  };
+
+  const startListening = async () => {
+    if (isPendingRef.current || isSpeakingRef.current || isListeningRef.current) return;
+    const win = window as any;
+    const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setErrorMessage("Speech input is not supported in this browser. You can type anytime.");
+      return;
+    }
+    await startMicrophone();
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {}
+        recognitionRef.current = null;
+      }
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      recognition.onstart = () => {
+        isListeningRef.current = true;
+        setIsListening(true);
+        setErrorMessage("");
+        finalTranscriptRef.current = "";
+      };
+
+      recognition.onresult = (event: any) => {
+        let interim = "";
+        let finalChunk = "";
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const res = event.results[i]?.[0];
+          if (res) {
+            if (event.results[i].isFinal) finalChunk += res.transcript + " ";
+            else interim += res.transcript;
+          }
+        }
+
+        if (finalChunk.trim().match(/^(?:hey\s+)?(?:jarvis\s+)?(?:source|sources|show sources|show me the sources)$/i)) {
+          if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+          const lastUserMsg = [...messagesRef.current].reverse().find((m) => m.role === "user")?.content;
+          if (lastUserMsg) handleSendMessage(`Show sources for: ${lastUserMsg}`);
+          else setErrorMessage("Ask me about a topic first, then say source.");
+          return;
+        }
+
+        if (finalChunk) finalTranscriptRef.current += finalChunk;
+        const currentText = (finalTranscriptRef.current + " " + interim).trim();
+        if (currentText) {
+          transcriptBufferRef.current = currentText;
+          setInterimText(currentText);
+        }
+
+        if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+        speechTimeoutRef.current = setTimeout(() => {
+          const queryToSend = transcriptBufferRef.current.trim();
+          if (queryToSend.length > 0 && !isPendingRef.current) {
+            handleSendMessage(queryToSend);
+          }
+        }, 1200);
+      };
+
+      recognition.onerror = (e: any) => {
+        if (e.error === "not-allowed") {
+          setErrorMessage("Microphone access was denied. Please allow microphone permissions or type directly.");
+          isListeningRef.current = false;
+          setIsListening(false);
+          stopMicrophone();
+        }
+      };
+
+      recognition.onend = () => {
+        isListeningRef.current = false;
+        setIsListening(false);
+        recognitionRef.current = null;
+
+        if (transcriptBufferRef.current.trim().length > 0 && !isPendingRef.current) {
+          const query = transcriptBufferRef.current.trim();
+          handleSendMessage(query);
+          return;
+        }
+
+        if (!isSpeakingRef.current && !isPendingRef.current && !isInputFocused) {
+          window.setTimeout(() => {
+            if (!isSpeakingRef.current && !isPendingRef.current && !isListeningRef.current) {
+              startListening();
+            }
+          }, 350);
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch {
+      isListeningRef.current = false;
+      setIsListening(false);
+      stopMicrophone();
+    }
+  };
+
+  const handleAwaken = () => {
+    setShowWakePrompt(false);
+    if (hasInitializedRef.current) return;
+    hasInitializedRef.current = true;
+    const welcomeMsg: ChatMessage = {
+      role: "assistant",
+      content: WELCOME_SPEECH,
+      id: `welcome-${Date.now()}`,
+    };
+    messagesRef.current = [welcomeMsg];
+    setMessages([welcomeMsg]);
+    speakText(WELCOME_SPEECH, true);
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (document.activeElement === inputRef.current) {
+        if (e.key === "Escape") {
+          setInputText("");
+          inputRef.current?.blur();
+          setIsInputFocused(false);
+          if (!isSpeakingRef.current && !isPendingRef.current) {
+            startListening();
+          }
+        }
+        return;
+      }
+      if (!e.ctrlKey && !e.metaKey && !e.altKey && !(e.key.length > 1 && e.key !== "Backspace")) {
+        inputRef.current?.focus();
+        setIsInputFocused(true);
+        if (recognitionRef.current) {
+          try {
+            recognitionRef.current.stop();
+          } catch {}
+          recognitionRef.current = null;
+          isListeningRef.current = false;
+          setIsListening(false);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.getVoices();
+      };
+    }
+    const timer = window.setTimeout(() => {
+      try {
+        handleAwaken();
+      } catch {
+        setShowWakePrompt(true);
+      }
+    }, 450);
+
+    const onUserInteraction = () => {
+      if (!hasInitializedRef.current) handleAwaken();
+    };
+
+    window.addEventListener("pointerdown", onUserInteraction, { once: true });
+    window.addEventListener("keydown", onUserInteraction, { once: true });
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", onUserInteraction);
+      window.removeEventListener("keydown", onUserInteraction);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (speechTimeoutRef.current) clearTimeout(speechTimeoutRef.current);
+      recognitionRef.current?.abort();
+      stopCameraGestures();
+      stopMicrophone();
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  const isOrbActive = isListening || isPending || isSpeaking;
+  const isTyping = isInputFocused || inputText.length > 0;
+  const statusLabel = isSpeaking
+    ? "JARVIS Speaking"
+    : isPending
+    ? "JARVIS Thinking"
+    : isTyping
+    ? "Noticing Typing..."
+    : isListening
+    ? "JARVIS Listening"
+    : "JARVIS Ready";
+
+  const statusClass = isSpeaking
+    ? "jarvis-status-badge--speaking"
+    : isPending
+    ? "jarvis-status-badge--thinking"
+    : isTyping || isListening
+    ? "jarvis-status-badge--listening"
+    : "";
 
   return (
-    <main className="dai-shell">
-      <div className="noise-layer" />
-      <div className="ambient ambient--one" />
-      <div className="ambient ambient--two" />
+    <main
+      className="jarvis-screen"
+      onClick={() => {
+        if (!hasInitializedRef.current) handleAwaken();
+      }}
+    >
+      <div className="jarvis-backdrop" />
 
-      <header className="topbar">
-        <div className="brand-lockup">
-          <div className="brand-orb"><span /></div>
-          <div><div className="brand-name">JARVIS</div><div className="brand-caption">DYNAMIC ATTENTION INTERFACE</div></div>
-        </div>
-        <div className="topbar-title"><span>DAI / PHASE ONE</span><strong>Information that moves to your attention.</strong></div>
-        <div className="topbar-status">
-          <span className="status-item"><span className="live-dot" /> ATTENTION MANAGER <b>ONLINE</b></span>
-          <span className="status-item"><Radio size={13} /> EVENT BUS <b>SYNCED</b></span>
-          <button type="button" className="round-button" aria-label="Open settings"><Settings2 size={16} /></button>
-        </div>
-      </header>
+      {showWakePrompt && (
+        <button
+          className="wake-prompt"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleAwaken();
+          }}
+          aria-label="Wake JARVIS"
+        >
+          <span className="wake-dot" />
+          <span>TAP TO AWAKEN JARVIS</span>
+        </button>
+      )}
 
-      <div className="app-grid">
-        <aside className="left-rail">
-          <div className="rail-heading"><span className="micro-label">SURFACES</span><span className="rail-count">08</span></div>
-          <nav className="section-nav" aria-label="Information sections">
-            {(Object.keys(sectionMeta) as SectionId[]).map((section) => {
-              const meta = sectionMeta[section];
-              const Icon = meta.icon;
-              const isSelected = activeNav === section;
-              const hasEvent = events.some((event) => event.section === section);
-              return (
-                <button key={section} type="button" className={`nav-item ${isSelected ? "nav-item--active" : ""}`} onClick={() => activateSection(section)}>
-                  <Icon size={16} strokeWidth={1.7} /><span>{meta.label}</span>{hasEvent && <i className="nav-signal" />}
+      <section className="jarvis-stage" aria-label="JARVIS voice visualizer">
+        <JarvisOrb
+          active={isOrbActive}
+          speaking={isSpeaking}
+          level={level}
+          bass={bass}
+          treble={treble}
+        />
+
+        <div className={`jarvis-status-badge ${statusClass}`} aria-live="polite">
+          <span className="jarvis-status-dot" />
+          <span>{statusLabel}</span>
+        </div>
+
+        <div
+          className={`jarvis-camera-panel ${cameraActive ? "jarvis-camera-panel--active" : ""}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <video
+            ref={cameraVideoRef}
+            className="jarvis-camera-preview"
+            muted
+            playsInline
+            aria-label="Camera gesture preview"
+          />
+          <div className="jarvis-camera-controls">
+            <button
+              type="button"
+              className="jarvis-camera-toggle"
+              onClick={() => void toggleCameraGestures()}
+            >
+              {cameraActive ? "Disable camera gestures" : "Enable camera gestures"}
+            </button>
+            <span>{cameraStatus}</span>
+          </div>
+        </div>
+
+        <div
+          className={`jarvis-screen-panel ${screenActive ? "jarvis-screen-panel--active" : ""}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <video
+            ref={screenVideoRef}
+            className="jarvis-screen-preview"
+            muted
+            playsInline
+            aria-label="Shared screen preview"
+          />
+          <div className="jarvis-screen-controls">
+            <button
+              type="button"
+              className="jarvis-screen-toggle"
+              onClick={() => void toggleScreenShare()}
+            >
+              {screenActive ? "Stop screen access" : "Share screen with JARVIS"}
+            </button>
+            <span>{screenStatus}</span>
+          </div>
+        </div>
+
+        <div className="caption-area" aria-live="polite">
+          <div className="caption-scroll" ref={captionScrollRef}>
+            {messages.slice(-6).map((msg, index) => {
+              const isLatest = index === messages.slice(-6).length - 1 && !isPending && !interimText;
+              return msg.role === "assistant" ? (
+                <button
+                  key={msg.id}
+                  type="button"
+                  className={`caption-turn caption-turn--clickable ${
+                    isLatest ? "caption-turn--latest" : "caption-turn--past"
+                  } caption--assistant`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedResponse(msg);
+                  }}
+                  aria-label="Open full JARVIS response"
+                >
+                  {msg.content}
                 </button>
+              ) : (
+                <p
+                  key={msg.id}
+                  className={`caption-turn ${
+                    isLatest ? "caption-turn--latest" : "caption-turn--past"
+                  } caption--user`}
+                >
+                  {msg.content}
+                </p>
               );
             })}
-          </nav>
-          <div className="rail-bottom">
-            <div className="rail-heading"><span className="micro-label">SYSTEM HEALTH</span><Activity size={14} /></div>
-            <div className="health-card"><div className="health-card__top"><span>Personal world model</span><strong>98%</strong></div><div className="health-track"><span /></div><div className="health-card__foot"><span>Context aligned</span><span className="health-live"><i /> LIVE</span></div></div>
-            <button type="button" className="rail-link" onClick={() => setToast("Attention policies are configured for context-aware delivery")}><BrainCircuit size={15} /> Attention policies <ArrowRight size={13} /></button>
-          </div>
-        </aside>
 
-        <section className="main-stage">
-          <div className="stage-head">
-            <div><div className="eyebrow"><span className="eyebrow-line" /> CORE VISUAL-INTERACTION LAYER</div><h1>A living surface for <em>what matters.</em></h1><p>JARVIS monitors incoming signals, evaluates their importance, then lets only the right section emerge.</p></div>
-            <div className="stage-actions"><div className="surface-state"><span className="live-dot" /> <span>CALM / READY</span></div><button type="button" className="icon-button" onClick={resetSequence} aria-label="Reset sequence"><RotateCcw size={16} /></button></div>
+            {isPending && (
+              <p className="caption-turn caption-turn--latest caption--thinking">
+                <span>JARVIS is processing</span>
+                <span className="caption-thinking-dots">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </p>
+            )}
+
+            {isListening && interimText && (
+              <p className="caption-turn caption-turn--latest caption--listening">
+                <span className="caption-streaming-word">{interimText}</span>
+                <span className="caption-streaming-cursor" />
+              </p>
+            )}
+            <div ref={captionEndRef} />
           </div>
 
-          <div className="attention-banner">
-            <div className="attention-banner__icon"><Zap size={17} /></div><div><span className="micro-label">CURRENT ATTENTION STATE</span><strong>{toast}</strong></div><div className="banner-phase"><PhasePill phase={phase} /></div>
+          {errorMessage && <small className="caption-error">{errorMessage}</small>}
+        </div>
+
+        {showNewsBriefing && newsArticles && newsArticles.length > 0 && (
+          <div className="jarvis-news-briefing-card" onClick={(e) => e.stopPropagation()}>
+            <div className="news-briefing-header">
+              <div className="news-briefing-title-group">
+                <span className="news-pulse-dot" />
+                <span className="news-briefing-tag">LIVE HOT TOPICS BRIEFING</span>
+              </div>
+              <button
+                type="button"
+                className="news-close-btn"
+                onClick={() => setShowNewsBriefing(false)}
+                aria-label="Dismiss news briefing"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="news-briefing-items">
+              {newsArticles.slice(0, 5).map((article, idx) => (
+                <a
+                  key={idx}
+                  href={article.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="news-briefing-item"
+                >
+                  <div className="news-item-badge">
+                    <span className="news-item-num">
+                      {idx === 0 ? "🔥 TOP STORY" : `#${idx + 1}`}
+                    </span>
+                    <span className="news-item-source">{article.source}</span>
+                  </div>
+                  <p className="news-item-title">{article.title}</p>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {sourceLinks.length > 0 && (
+          <div className="jarvis-source-card" onClick={(e) => e.stopPropagation()}>
+            <div className="news-briefing-header">
+              <div className="news-briefing-title-group">
+                <span className="news-pulse-dot" />
+                <span className="news-briefing-tag">SOURCES FOR THIS ANSWER</span>
+              </div>
+              <button
+                type="button"
+                className="news-close-btn"
+                onClick={() => setSourceLinks([])}
+                aria-label="Dismiss sources"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="news-briefing-items">
+              {sourceLinks.map((src) => (
+                <a
+                  key={src.url}
+                  href={src.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="news-briefing-item"
+                >
+                  <div className="news-item-badge">
+                    <span className="news-item-source">{src.source}</span>
+                  </div>
+                  <p className="news-item-title">{src.title}</p>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="jarvis-input-container" onClick={(e) => e.stopPropagation()}>
+          <form
+            className={`jarvis-input-bar ${isTyping ? "jarvis-input-bar--active" : ""}`}
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (inputText.trim()) {
+                handleSendMessage(inputText);
+                setInputText("");
+                inputRef.current?.blur();
+                setIsInputFocused(false);
+              }
+            }}
+          >
+            <span className="jarvis-input-icon">⌨</span>
+            <input
+              ref={inputRef}
+              type="text"
+              className="jarvis-input-field"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onFocus={() => setIsInputFocused(true)}
+              onBlur={() => setIsInputFocused(false)}
+              placeholder="Speak naturally, or simply start typing anywhere..."
+              aria-label="Ask JARVIS anything"
+            />
+            {inputText.trim().length > 0 && (
+              <button type="submit" className="jarvis-send-btn" aria-label="Send message">
+                ↵
+              </button>
+            )}
+          </form>
+
+          <div className={`jarvis-input-hint ${isTyping ? "jarvis-input-hint--visible" : ""}`}>
+            <span>
+              Press <kbd>Enter ↵</kbd> to send
+            </span>
+            <span>•</span>
+            <span>
+              <kbd>Esc</kbd> to return to voice
+            </span>
           </div>
 
-          <div className="section-grid">
-            {(Object.keys(sectionMeta) as SectionId[]).map((section) => (
-              <SectionCard key={section} section={section} active={section === activeSection} currentEvent={activeEvent} phase={phase} onActivate={activateSection} />
+          <div className="jarvis-quick-prompts">
+            {quickPrompts.map((item, idx) => (
+              <button
+                key={idx}
+                type="button"
+                className="jarvis-prompt-chip"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleSendMessage(item.query);
+                }}
+                disabled={isPending || isSpeaking}
+              >
+                {item.label}
+              </button>
             ))}
           </div>
+        </div>
+      </section>
 
-          <div className="bottom-command-row">
-            <form className="command-bar" onSubmit={submitCommand}><span className="command-icon"><TerminalSquare size={16} /></span><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Ask JARVIS to reprioritize, brief, or dismiss…" aria-label="Command JARVIS" /><button type="submit" aria-label="Send command"><Send size={15} /></button></form>
-            <button type="button" className={`sequence-button ${isPlaying ? "sequence-button--playing" : ""}`} onClick={isPlaying ? () => setIsPaused((paused) => !paused) : startSequence}>{isPlaying && !isPaused ? <Pause size={14} /> : <Play size={14} />}{isPlaying ? (isPaused ? "Resume sequence" : "Pause sequence") : "Run next event"}</button>
-          </div>
-        </section>
-
-        <aside className="right-rail">
-          <div className="right-rail__header"><div><span className="micro-label">ATTENTION MANAGER</span><h2>Priority queue</h2></div><span className="queue-count">{String(events.length).padStart(2, "0")}</span></div>
-          <div className="queue-list">
-            <div className="queue-label"><span>NOW PRESENTING</span><span>PRIORITY</span></div>
-            <div className="now-card"><div className="now-card__top"><span className="now-section">{(() => { const ActiveIcon = activeEvent.icon; return <ActiveIcon size={15} />; })()} {sectionMeta[activeEvent.section].label}</span><PriorityBadge priority={activeEvent.priority} /></div><strong>{activeEvent.title}</strong><span className="now-card__source">{activeEvent.source}</span><div className="delivery-progress"><span style={{ width: `${Math.max(12, ((phaseIndex + 1) / phaseOrder.length) * 100)}%` }} /></div><div className="delivery-meta"><span>Delivery sequence</span><b>{phaseIndex + 1} / {phaseOrder.length}</b></div></div>
-            <div className="queue-label queue-label--later"><span>UP NEXT</span><span>{queuedEvents.length} WAITING</span></div>
-            {queuedEvents.map((event, index) => { const Icon = event.icon; return <button key={event.id} type="button" className="queue-item" onClick={() => { setActiveEventId(event.id); setActiveNav(event.section); setPhase("DETECTED"); setToast(`${sectionMeta[event.section].label} moved to the front of the queue`); }}><span className="queue-number">0{index + 1}</span><span className="queue-item__icon"><Icon size={15} /></span><span className="queue-item__copy"><strong>{event.title}</strong><small>{sectionMeta[event.section].label} · {event.age}</small></span><PriorityBadge priority={event.priority} /><ArrowRight size={14} /></button>; })}
-          </div>
-
-          <div className="presentation-panel"><div className="right-rail__header presentation-heading"><div><span className="micro-label">PRESENTATION ENGINE</span><h2>Delivery controls</h2></div><Volume2 size={16} className={isMuted ? "muted" : ""} /></div><div className="voice-transcript"><span className="transcript-mark">J</span><p>“{activeEvent.summary}”</p></div><div className="control-row"><button type="button" className="control-button control-button--primary" onClick={() => setIsPaused((paused) => !paused)}><CirclePause size={14} /> {isPaused ? "Resume" : "Pause"}</button><button type="button" className="control-button" onClick={() => setIsMuted((muted) => !muted)}><Volume2 size={14} /> {isMuted ? "Unmute" : "Mute"}</button><button type="button" className="control-button" onClick={() => { setPhase("RESTING"); setToast("Current delivery dismissed; queue remains intact"); }}><X size={14} /> Dismiss</button></div><div className="why-card"><div className="why-card__title"><Gauge size={14} /> WHY THIS APPEARED <button type="button" aria-label="More about prioritization"><MoreHorizontal size={14} /></button></div><p>{currentReason}</p><div className="scores"><ScoreBar label="Relevance" value={activeEvent.relevance} color="#72b9ff" /><ScoreBar label="Urgency" value={activeEvent.urgency} color="#f7c66f" /></div></div></div>
-
-          <div className="event-bus"><div className="micro-label">EVENT BUS / LIVE TRACE</div><div className="bus-line"><span className="bus-node bus-node--done"><Check size={11} /></span><span className="bus-connector" /><span className="bus-node bus-node--done"><BrainCircuit size={11} /></span><span className="bus-connector" /><span className="bus-node bus-node--active"><Zap size={11} /></span><span className="bus-connector" /><span className="bus-node"><LayoutGrid size={11} /></span></div><div className="bus-labels"><span>DETECT</span><span>ANALYZE</span><span>PRIORITIZE</span><span>ACT</span></div><div className="bus-foot"><span><span className="live-dot" /> 3 events evaluated</span><span>Interrupt-safe</span></div></div>
-        </aside>
-      </div>
-
-      <footer className="footer-bar"><div><ShieldCheck size={14} /> <span>CONTEXT-AWARE</span><small>No competing interruptions</small></div><div><Layers3 size={14} /> <span>QUEUE-AWARE</span><small>One section at a time</small></div><div><MoveUpRight size={14} /> <span>EXTENSIBLE</span><small>Desktop · mobile · AR</small></div><div className="footer-quote">“Information moves to your attention.” <span>— JARVIS</span></div><button type="button" onClick={injectEvent} className="inject-button"><Bell size={13} /> Inject project event</button></footer>
+      {selectedResponse && (
+        <div
+          className="jarvis-response-overlay"
+          role="presentation"
+          onClick={() => setSelectedResponse(null)}
+        >
+          <article
+            className="jarvis-response-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Full JARVIS response"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="jarvis-response-modal-header">
+              <span>JARVIS RESPONSE</span>
+              <button
+                type="button"
+                className="news-close-btn"
+                onClick={() => setSelectedResponse(null)}
+                aria-label="Close full response"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="jarvis-response-modal-body">
+              <p className="jarvis-response-full-text">{selectedResponse.content}</p>
+              {selectedResponse.topicImages && selectedResponse.topicImages.length > 0 && (
+                <div className="jarvis-topic-images">
+                  {selectedResponse.topicImages.map((img) => (
+                    <a
+                      key={img.url}
+                      href={img.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="jarvis-topic-image-link"
+                    >
+                      <img src={img.thumbnailUrl} alt={img.title} loading="lazy" />
+                      <span>{img.title}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          </article>
+        </div>
+      )}
     </main>
   );
 }
