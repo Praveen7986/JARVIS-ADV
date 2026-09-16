@@ -39,9 +39,16 @@ export function createJarvisApp(): Express {
     next();
   });
 
-  // Body parser
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  // Body parser (safely handles serverless environments like Vercel where req.body is already parsed)
+  app.use((req, res, next) => {
+    if (req.body !== undefined && typeof req.body === "object") {
+      return next();
+    }
+    express.json({ limit: "50mb" })(req, res, (err) => {
+      if (err) return next(err);
+      express.urlencoded({ limit: "50mb", extended: true })(req, res, next);
+    });
+  });
 
   // Static proxy & OAuth
   registerStorageProxy(app);

@@ -73443,8 +73443,15 @@ function createJarvisApp() {
     current.count += 1;
     next();
   });
-  app2.use(import_express.default.json({ limit: "50mb" }));
-  app2.use(import_express.default.urlencoded({ limit: "50mb", extended: true }));
+  app2.use((req, res, next) => {
+    if (req.body !== void 0 && typeof req.body === "object") {
+      return next();
+    }
+    import_express.default.json({ limit: "50mb" })(req, res, (err) => {
+      if (err) return next(err);
+      import_express.default.urlencoded({ limit: "50mb", extended: true })(req, res, next);
+    });
+  });
   registerStorageProxy(app2);
   registerOAuthRoutes(app2);
   app2.use(
