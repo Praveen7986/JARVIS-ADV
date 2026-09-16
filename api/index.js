@@ -73465,9 +73465,25 @@ function createJarvisApp() {
 }
 
 // api/index.ts
-var app = createJarvisApp();
-function handler(req, res) {
-  return app(req, res);
+var app;
+try {
+  app = createJarvisApp();
+} catch (e) {
+  console.error("Failed to create app:", e);
+}
+async function handler(req, res) {
+  if (!app) {
+    return res.status(500).json({ error: "App initialization failed" });
+  }
+  return new Promise((resolve) => {
+    app(req, res, (err) => {
+      if (err) {
+        console.error("App execution error:", err);
+        res.status(500).json({ error: err.message, stack: err.stack });
+      }
+      resolve(null);
+    });
+  });
 }
 export {
   handler as default
