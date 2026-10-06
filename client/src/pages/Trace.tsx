@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  Brain,
   Check,
   Copy,
   CircleHelp,
@@ -58,7 +59,14 @@ export default function Trace() {
   const [sharingUrl, setSharingUrl] = useState("");
   const [copied, setCopied] = useState(false);
   const ownerQuery = trpc.auth.me.useQuery(undefined, { retry: false });
-  const peopleQuery = trpc.trace.people.useQuery(undefined, { retry: false, enabled: Boolean(ownerQuery.data) });
+  const peopleQuery = trpc.trace.people.useQuery(undefined, {
+    retry: false,
+    enabled: Boolean(ownerQuery.data),
+    refetchInterval: 3000,
+  });
+  const markersRef = useRef<Map<number, google.maps.Marker>>(new Map());
+  const [selectedPerson, setSelectedPerson] = useState<any | null>(null);
+
   const createSharingLink = trpc.trace.createSharingLink.useMutation({
     onSuccess: (result) => {
       setSharingUrl(result.url);
@@ -83,10 +91,120 @@ export default function Trace() {
     onSuccess: () => void peopleQuery.refetch(),
     onError: (error) => setFormError(error.message || "Could not remove this person."),
   });
+  const people = (peopleQuery.data ?? []) as any[];
+
+  // Jarvis Voice presence & active listening on Trace subpage
+  useEffect(() => {
+    const greeting = "Trace Location Suite online, Sir. Ready to monitor live GPS telemetry and coordinate tracking.";
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(greeting);
+      utterance.rate = 1.0;
+      utterance.pitch = 0.95;
+      utterance.onend = () => startVoiceListener();
+      utterance.onerror = () => startVoiceListener();
+      window.speechSynthesis.speak(utterance);
+    } else {
+      startVoiceListener();
+    }
+
+    function startVoiceListener() {
+      const win = window as any;
+      const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
+      if (!SpeechRecognition) return;
+      try {
+        const rec = new SpeechRecognition();
+        rec.continuous = true;
+        rec.interimResults = false;
+        rec.lang = "en-US";
+        rec.onend = () => {
+          setTimeout(() => {
+            try { rec.start(); } catch {}
+          }, 600);
+        };
+        rec.onresult = (e: any) => {
+          const lastIdx = e.results.length - 1;
+          const transcript = e.results[lastIdx]?.[0]?.transcript?.trim().toLowerCase() || "";
+          if (transcript.includes("home") || transcript.includes("go back") || transcript.includes("exit")) {
+            setLocation("/");
+          } else if (transcript.includes("man 1") || transcript.includes("man one") || transcript.includes("operations")) {
+            setLocation("/man1");
+          } else if (transcript.includes("satellite")) {
+            setMapMode("satellite");
+          } else if (transcript.includes("roadmap") || transcript.includes("map")) {
+            setMapMode("roadmap");
+          } else if (transcript.includes("add person") || transcript.includes("add track")) {
+            setAddPersonOpen(true);
+          }
+        };
+        rec.start();
+      } catch {}
+    }
+
+    return () => {
+      if ("speechSynthesis" in window) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
 
   useEffect(() => {
-    mapRef.current?.setMapTypeId(mapMode);
-  }, [mapMode]);
+    if (!mapRef.current || !window.google?.maps) return;
+    const map = mapRef.current;
+    const currentMarkers = markersRef.current;
+
+    people.forEach((person) => {
+      if (person.latitude != null && person.longitude != null) {
+        const pos = { lat: Number(person.latitude), lng: Number(person.longitude) };
+        let marker = currentMarkers.get(person.id);
+        if (!marker) {
+          marker = new window.google.maps.Marker({
+            position: pos,
+            map,
+            title: person.displayName || person.name,
+            icon: {
+              path: window.google.maps.SymbolPath.CIRCLE,
+              scale: 9,
+              fillColor:
+                person.category === "family"
+                  ? "#fcd34d"
+                  : person.category === "friends"
+                  ? "#c4b5fd"
+                  : person.category === "relatives"
+                  ? "#fda4af"
+                  : "#67e8f9",
+              fillOpacity: 1,
+              strokeColor: "#071018",
+              strokeWeight: 2,
+            },
+          });
+          marker.addListener("click", () => {
+            setSelectedPerson(person);
+            map.panTo(pos);
+            map.setZoom(15);
+          });
+          currentMarkers.set(person.id, marker);
+        } else {
+          marker.setPosition(pos);
+        }
+      }
+    });
+
+    currentMarkers.forEach((marker, id) => {
+      if (!people.some((p) => p.id === id && p.latitude != null)) {
+        marker.setMap(null);
+        currentMarkers.delete(id);
+      }
+    });
+  }, [people]);
+
+  const focusPerson = (person: any) => {
+    setSelectedPerson(person);
+    if (person.latitude != null && person.longitude != null && mapRef.current) {
+      mapRef.current.panTo({ lat: Number(person.latitude), lng: Number(person.longitude) });
+      mapRef.current.setZoom(15);
+    }
+  };
 
   const setZoom = (delta: number) => {
     const map = mapRef.current;
@@ -106,7 +224,6 @@ export default function Trace() {
     });
   };
 
-  const people = peopleQuery.data ?? [];
   const visiblePeople = people.filter((person) => {
     const matchesSearch = `${person.name} ${person.displayName ?? ""}`.toLowerCase().includes(search.toLowerCase());
     const matchesCategory = category === "All people" || person.category === category.toLowerCase();
@@ -149,6 +266,13 @@ export default function Trace() {
           </div>
         </div>
         <div className="hidden items-center gap-5 md:flex">
+          <button
+            onClick={() => setLocation("/ai-builder")}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-xs font-mono font-bold transition-all shadow-[0_0_10px_rgba(6,182,212,0.15)]"
+          >
+            <Brain className="size-3.5 text-cyan-400 animate-pulse" />
+            <span>AI Builder</span>
+          </button>
           <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-slate-500"><span className="size-1.5 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,.8)]" />Engine ready</div>
           <div className="h-5 w-px bg-white/10" />
           <button type="button" className="flex items-center gap-2 text-xs text-slate-400 transition hover:text-white"><CircleHelp className="size-4" /> Help</button>
@@ -168,7 +292,73 @@ export default function Trace() {
             <Button type="button" className="mb-4 h-10 w-full gap-2 rounded-xl bg-cyan-300 text-xs font-semibold text-[#071018] hover:bg-cyan-200" onClick={() => { setFormError(""); setAddPersonOpen(true); }}><UserRoundPlus className="size-4" /> Add person</Button>
             <label className="group flex items-center gap-2.5 rounded-xl border border-white/10 bg-white/[0.045] px-3.5 py-3 text-sm text-slate-500 transition focus-within:border-cyan-300/50 focus-within:bg-white/[0.07]"><Search className="size-4 shrink-0 transition group-focus-within:text-cyan-300" /><input value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600" placeholder="Search people" /><span className="hidden rounded border border-white/10 px-1.5 py-0.5 text-[9px] text-slate-600 sm:block">⌘ K</span></label>
             <div className="mt-7"><div className="mb-2 flex items-center justify-between px-1"><p className="text-[10px] font-medium uppercase tracking-[0.2em] text-slate-500">Categories</p><span className="text-[10px] text-slate-600">{people.length} connected</span></div><nav className="space-y-1">{categoryDefinitions.map((item) => { const active = category === item.label; return <button key={item.label} type="button" onClick={() => setCategory(item.label)} className={`group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${active ? "bg-cyan-300/[0.11] text-cyan-100 ring-1 ring-inset ring-cyan-300/20" : "text-slate-400 hover:bg-white/[0.045] hover:text-slate-200"}`}><span className={`size-2 rounded-full ${item.color} ${active ? "shadow-[0_0_10px_currentColor]" : "opacity-60"}`} /><span className="flex-1 text-xs">{item.label}</span><span className={`text-[11px] ${active ? "text-cyan-300" : "text-slate-600"}`}>{countFor(item.value)}</span></button>; })}</nav></div>
-            <div className="mt-6 flex-1">{visiblePeople.length > 0 ? <div className="space-y-2">{visiblePeople.map((person) => <div key={person.id} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3"><div className="grid size-9 place-items-center rounded-full bg-cyan-300/15 text-xs font-semibold text-cyan-200">{(person.displayName || person.name).slice(0, 1).toUpperCase()}</div><div className="min-w-0"><p className="truncate text-xs font-medium text-slate-200">{person.displayName || person.name}</p><p className="mt-1 text-[10px] capitalize text-slate-500">{person.category}</p></div><span className="ml-auto size-1.5 rounded-full bg-slate-500" title="No location connected" /></div>)}</div> : <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] px-5 py-7 text-center"><div className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] text-cyan-300"><MapPinned className="size-5" /></div><p className="text-sm font-medium text-slate-200">{people.length > 0 ? "No people found" : "Your map is quiet"}</p><p className="mx-auto mt-2 max-w-[210px] text-[11px] leading-5 text-slate-500">{people.length > 0 ? "Try a different search or category." : "Add someone with an authorized location source to see them here."}</p><Button className="mt-5 h-9 w-full gap-2 rounded-lg bg-cyan-300 text-xs font-semibold text-[#071018] hover:bg-cyan-200" onClick={() => setAddPersonOpen(true)}><UserRoundPlus className="size-4" /> Add person</Button></div>}</div>
+            <div className="mt-6 flex-1 overflow-y-auto">
+              {visiblePeople.length > 0 ? (
+                <div className="space-y-2">
+                  {visiblePeople.map((person) => {
+                    const hasLocation = person.latitude != null && person.longitude != null;
+                    const isSelected = selectedPerson?.id === person.id;
+                    return (
+                      <button
+                        key={person.id}
+                        type="button"
+                        onClick={() => focusPerson(person)}
+                        className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
+                          isSelected
+                            ? "border-cyan-300/40 bg-cyan-300/[0.08]"
+                            : "border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]"
+                        }`}
+                      >
+                        <div className="grid size-9 shrink-0 place-items-center rounded-full bg-cyan-300/15 text-xs font-semibold text-cyan-200">
+                          {(person.displayName || person.name).slice(0, 1).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs font-medium text-slate-200">
+                            {person.displayName || person.name}
+                          </p>
+                          <div className="mt-0.5 flex items-center gap-2">
+                            <span className="text-[10px] capitalize text-slate-500">{person.category}</span>
+                            {hasLocation && (
+                              <span className="text-[9px] text-emerald-400">
+                                {person.batteryLevel ? `⚡ ${person.batteryLevel}%` : "Live"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {hasLocation ? (
+                          <span
+                            className="size-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)] animate-pulse"
+                            title="Live location streaming"
+                          />
+                        ) : (
+                          <span className="size-1.5 rounded-full bg-slate-600" title="No location connected" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-white/15 bg-white/[0.02] px-5 py-7 text-center">
+                  <div className="mx-auto mb-4 grid size-12 place-items-center rounded-2xl border border-cyan-300/20 bg-cyan-300/[0.07] text-cyan-300">
+                    <MapPinned className="size-5" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-200">
+                    {people.length > 0 ? "No people found" : "Your map is quiet"}
+                  </p>
+                  <p className="mx-auto mt-2 max-w-[210px] text-[11px] leading-5 text-slate-500">
+                    {people.length > 0
+                      ? "Try a different search or category."
+                      : "Add someone and share their link to track their live mobile location."}
+                  </p>
+                  <Button
+                    className="mt-5 h-9 w-full gap-2 rounded-lg bg-cyan-300 text-xs font-semibold text-[#071018] hover:bg-cyan-200"
+                    onClick={() => setAddPersonOpen(true)}
+                  >
+                    <UserRoundPlus className="size-4" /> Add person
+                  </Button>
+                </div>
+              )}
+            </div>
             <div className="mt-5 flex items-start gap-2.5 rounded-xl border border-emerald-300/10 bg-emerald-300/[0.04] p-3.5"><ShieldCheck className="mt-0.5 size-4 shrink-0 text-emerald-300" /><p className="text-[10px] leading-4 text-slate-500">People appear here when you add them and connect an authorized sharing source.</p></div>
           </div>
         </aside>
@@ -178,7 +368,56 @@ export default function Trace() {
           <MapView className="absolute inset-0 h-full" initialCenter={fallbackCenter} initialZoom={fallbackZoom} fallbackCenter={fallbackCenter} fallbackZoom={fallbackZoom} fallbackMode={mapMode} onMapReady={(map) => { mapRef.current = map; map.setMapTypeId(mapMode); }} />
           <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_42%,transparent_35%,rgba(5,12,18,.38)_100%)]" />
           <div className="absolute left-4 right-4 top-4 flex items-start justify-between gap-3 md:left-7 md:right-7 md:top-7"><div className="pointer-events-auto flex items-center gap-1 rounded-xl border border-white/15 bg-[#08131d]/90 p-1 shadow-2xl shadow-black/20 backdrop-blur-xl"><button type="button" onClick={() => setMapMode("roadmap")} className={`rounded-lg px-3.5 py-2 text-[11px] font-medium transition ${mapMode === "roadmap" ? "bg-white text-[#0a1722] shadow-lg" : "text-slate-400 hover:text-white"}`}>Standard</button><button type="button" onClick={() => setMapMode("satellite")} className={`rounded-lg px-3.5 py-2 text-[11px] font-medium transition ${mapMode === "satellite" ? "bg-white text-[#0a1722] shadow-lg" : "text-slate-400 hover:text-white"}`}>Satellite</button></div><div className="pointer-events-auto flex flex-col overflow-hidden rounded-xl border border-white/15 bg-[#08131d]/90 shadow-2xl shadow-black/20 backdrop-blur-xl"><Button variant="ghost" size="icon-sm" className="rounded-none text-slate-300 hover:bg-white/10 hover:text-white" onClick={() => setZoom(1)} aria-label="Zoom in"><Plus /></Button><div className="mx-2 border-t border-white/10" /><Button variant="ghost" size="icon-sm" className="rounded-none text-slate-300 hover:bg-white/10 hover:text-white" onClick={() => setZoom(-1)} aria-label="Zoom out"><Minus /></Button><div className="mx-2 border-t border-white/10" /><Button variant="ghost" size="icon-sm" className="rounded-none text-cyan-300 hover:bg-white/10 hover:text-cyan-200" onClick={recenter} aria-label="Recenter on me"><Crosshair /></Button></div></div>
-          <div className="absolute bottom-5 left-4 right-4 flex items-end justify-between gap-3 md:bottom-7 md:left-7 md:right-7"><div className="max-w-[280px] rounded-2xl border border-white/15 bg-[#08131d]/90 p-4 shadow-2xl shadow-black/25 backdrop-blur-xl"><div className="flex items-center gap-2 text-cyan-300"><LocateFixed className="size-4" /><span className="text-[10px] font-semibold uppercase tracking-[0.18em]">Live map</span></div><p className="mt-2 text-xs text-slate-300">No authorized locations available</p><p className="mt-1 text-[10px] leading-4 text-slate-500">Locations will appear here after a person accepts their sharing link.</p></div><button type="button" className="hidden items-center gap-2 rounded-xl border border-white/15 bg-[#08131d]/90 px-3.5 py-3 text-[11px] text-slate-300 shadow-xl backdrop-blur-xl transition hover:border-cyan-300/40 hover:text-white sm:flex" onClick={recenter}><Navigation className="size-3.5 text-cyan-300" /> Recenter on me</button></div>
+          <div className="absolute bottom-5 left-4 right-4 flex items-end justify-between gap-3 md:bottom-7 md:left-7 md:right-7">
+            <div className="max-w-[320px] rounded-2xl border border-white/15 bg-[#08131d]/90 p-4 shadow-2xl shadow-black/25 backdrop-blur-xl">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 text-cyan-300">
+                  <LocateFixed className="size-4" />
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.18em]">
+                    {selectedPerson ? (selectedPerson.displayName || selectedPerson.name) : "Live map"}
+                  </span>
+                </div>
+                {selectedPerson && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPerson(null)}
+                    className="text-[10px] text-slate-500 hover:text-white"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {selectedPerson ? (
+                selectedPerson.latitude != null ? (
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-emerald-300 font-medium">Live GPS Stream Active</p>
+                    <p className="text-[11px] text-slate-300">
+                      Lat: {Number(selectedPerson.latitude).toFixed(4)}, Lng: {Number(selectedPerson.longitude).toFixed(4)}
+                    </p>
+                    {selectedPerson.lastLocationAt && (
+                      <p className="text-[9px] text-slate-500">
+                        Updated {new Date(selectedPerson.lastLocationAt).toLocaleTimeString()}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-400">Waiting for this person to open their shared link on mobile.</p>
+                )
+              ) : (
+                <>
+                  <p className="mt-2 text-xs text-slate-300">
+                    {people.filter((p) => p.latitude != null).length > 0
+                      ? `${people.filter((p) => p.latitude != null).length} active connections streaming location`
+                      : "No authorized locations available"}
+                  </p>
+                  <p className="mt-1 text-[10px] leading-4 text-slate-500">
+                    Send a sharing link to any contact's mobile phone to see their real-time coordinates.
+                  </p>
+                </>
+              )}
+            </div>
+            <button type="button" className="hidden items-center gap-2 rounded-xl border border-white/15 bg-[#08131d]/90 px-3.5 py-3 text-[11px] text-slate-300 shadow-xl backdrop-blur-xl transition hover:border-cyan-300/40 hover:text-white sm:flex" onClick={recenter}><Navigation className="size-3.5 text-cyan-300" /> Recenter on me</button>
+          </div>
           <div className="pointer-events-none absolute bottom-7 left-1/2 hidden -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-[#08131d]/75 px-3 py-1.5 text-[9px] uppercase tracking-[0.14em] text-slate-500 backdrop-blur md:flex"><Layers className="size-3" /> {mapMode === "satellite" ? "Satellite imagery" : "Road map"}</div>
         </section>
       </div>

@@ -98,7 +98,18 @@ export function generateJarvisResponse(messages: Message[], newsBriefing?: strin
 
   // 4. System Status & Health
   if (/system status|diagnostic|how are you|how do you feel|are you working|health check/i.test(lower)) {
-    return "All primary diagnostic routines report normal. Audio frequency visualizer and natural speech synthesizers are calibrated and operating at 100%.";
+    return "All primary diagnostic routines report normal. Audio frequency visualizer, neural engines, and AI Builder development pipelines are calibrated and operating at 100%.";
+  }
+
+  // 4b. AI Builder & Autonomous LLM Engineering
+  if (/ai builder|fine-?tun|train.*model|create.*model|dataset.*model|loss.*curve/i.test(lower)) {
+    if (/telugu/i.test(lower)) {
+      return "The Telugu-English multilingual model is configured with Qwen 2.5 1.5B using 4-bit QLoRA. 12,400 instruction pairs have been prepared in your AI Builder workspace.";
+    }
+    if (/train/i.test(lower)) {
+      return "AI Builder is managing local PyTorch and CUDA tensor allocations. Would you like me to inspect the training loss curves or evaluate model checkpoints?";
+    }
+    return "The AI Builder skill is active. You can tell me what AI system you want to construct, and I will plan the architecture, generate the training scripts, and run the pipeline through Computer Use.";
   }
 
   // 5. Day Planning, Productivity & Tasks

@@ -109,6 +109,37 @@ export async function resolveTraceSharingToken(token: string): Promise<TracePers
   return rows[0]?.person ?? null;
 }
 
+export async function updateTracePersonLocation(
+  token: string,
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number;
+    heading?: number;
+    speed?: number;
+    batteryLevel?: number;
+  }
+) {
+  const tokenHash = hashTraceShareToken(token);
+  const db = await getDb();
+  if (!db) {
+    const updated = await getLocalPersonByTokenHash(tokenHash);
+    if (!updated) throw new Error("Invalid or revoked sharing link.");
+    const { updateLocalPersonLocationByTokenHash } = await import("./localStore");
+    return updateLocalPersonLocationByTokenHash(tokenHash, coords);
+  }
+
+  const rows = await db
+    .select({ person: tracePeople, linkId: traceSharingLinks.id })
+    .from(traceSharingLinks)
+    .innerJoin(tracePeople, eq(tracePeople.id, traceSharingLinks.personId))
+    .where(and(eq(traceSharingLinks.tokenHash, tokenHash), isNull(traceSharingLinks.revokedAt)))
+    .limit(1);
+
+  if (!rows[0]?.person) throw new Error("Invalid or revoked sharing link.");
+  return rows[0].person;
+}
+
 export async function deleteTracePerson(personId: number, ownerUserId: number) {
   const db = await getDb();
   if (!db) {

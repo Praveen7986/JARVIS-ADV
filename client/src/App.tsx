@@ -7,6 +7,8 @@ import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
 import Trace from "./pages/Trace";
 import TraceShare from "./pages/TraceShare";
+import Man1Dashboard from "./pages/Man1Dashboard";
+import AiBuilder from "./pages/AiBuilder";
 
 function Router() {
   // make sure to consider if you need authentication for certain routes
@@ -15,6 +17,8 @@ function Router() {
       <Route path={"/"} component={Home} />
       <Route path={"/trace"} component={Trace} />
       <Route path={"/trace/share/:token"} component={TraceShare} />
+      <Route path={"/man1"} component={Man1Dashboard} />
+      <Route path={"/ai-builder"} component={AiBuilder} />
       <Route path={"/404"} component={NotFound} />
       {/* Final fallback route */}
       <Route component={NotFound} />

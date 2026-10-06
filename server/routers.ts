@@ -5,7 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { generateJarvisResponse } from "./jarvisBrain";
 import { fetchKnowledgeContext, formatKnowledgePromptContext, isKnowledgeSourcesQuery } from "./knowledgeService";
-import { fetchTopicImages } from "./imageService";
+import { fetchTopicImages, fetchTopicMedia } from "./mediaService";
 import { openApp, type AppName } from "./appActions";
 import {
   detectNewsQuery,
@@ -18,8 +18,10 @@ import {
   isNewsSourcesQuery,
   type NewsArticle,
 } from "./newsService";
-import { createTracePerson, createTraceSharingLink, deleteTracePerson, listTracePeople, resolveTraceSharingToken, revokeTraceSharingLink } from "./traceSharingService";
+import { createTracePerson, createTraceSharingLink, deleteTracePerson, listTracePeople, resolveTraceSharingToken, revokeTraceSharingLink, updateTracePersonLocation } from "./traceSharingService";
 import { loginLocalUser, registerLocalUser } from "./localAuth";
+import { man1Router } from "./man1/man1Router";
+import { aiBuilderRouter } from "./aiBuilder/aiBuilderRouter";
 
 const chatMessageSchema = z.object({
   role: z.enum(["user", "assistant"]),
@@ -67,7 +69,7 @@ export const appRouter = router({
         return { articles };
       }),
 
-    chat: publicProcedure
+  chat: publicProcedure
       .input(
         z.object({
           messages: z.array(chatMessageSchema).min(1).max(20),
@@ -88,15 +90,15 @@ export const appRouter = router({
           const app = appMatch[1].toLowerCase() as AppName;
           try {
             openApp(app);
-            return { reply: `Opening ${app}.`, action: { type: "open_app" as const, app }, newsArticles: [], sourceLinks: [], topicImages: [] };
+            return { reply: `Opening ${app}.`, action: { type: "open_app" as const, app }, newsArticles: [], sourceLinks: [], topicImages: [], topicMedia: { images: [], videos: [], socialMedia: [] } };
           } catch (error) {
             console.warn("[JARVIS] App launch failed:", error);
-            return { reply: `I could not open ${app} on this computer.`, newsArticles: [], sourceLinks: [], topicImages: [] };
+            return { reply: `I could not open ${app} on this computer.`, newsArticles: [], sourceLinks: [], topicImages: [], topicMedia: { images: [], videos: [], socialMedia: [] } };
           }
         }
         const newsCheck = detectNewsQuery(latestMessage);
         const sourcesRequested = isNewsSourcesQuery(latestMessage);
-        const topicImagesPromise = screenAnalysisRequested ? Promise.resolve([]) : fetchTopicImages(latestMessage);
+        const topicMediaPromise = screenAnalysisRequested ? Promise.resolve({ images: [], videos: [], socialMedia: [] }) : fetchTopicMedia(latestMessage);
         const isTopicOnlyMessage = /^[a-z\d][a-z\d\s-]{1,79}$/i.test(latestMessage.trim()) && latestMessage.trim().split(/\s+/).length <= 8;
 
         let liveNewsArticles: NewsArticle[] | undefined;
@@ -155,8 +157,8 @@ export const appRouter = router({
                 };
                 const visionReply = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(" ").trim();
                 if (response.ok && visionReply) {
-                  const topicImages = await fetchTopicImages(visionReply);
-                  return { reply: visionReply, ...(topicImages.length > 0 ? { topicImages } : {}) };
+                  const topicMedia = await fetchTopicMedia(visionReply);
+                  return { reply: visionReply, topicMedia, topicImages: topicMedia.images };
                 }
                 console.warn(`Gemini vision attempt ${attempt} failed:`, response.status, data.error?.message || "No vision response");
                 if (response.status === 401 || response.status === 403) {
@@ -204,8 +206,8 @@ export const appRouter = router({
               };
               const openaiVisionReply = data.choices?.[0]?.message?.content?.trim();
               if (response.ok && openaiVisionReply) {
-                const topicImages = await fetchTopicImages(openaiVisionReply);
-                return { reply: openaiVisionReply, ...(topicImages.length > 0 ? { topicImages } : {}) };
+                const topicMedia = await fetchTopicMedia(openaiVisionReply);
+                return { reply: openaiVisionReply, topicMedia, topicImages: topicMedia.images };
               }
               console.warn("OpenAI vision error:", response.status, data.error?.message || "No vision response");
             } catch (error) {
@@ -278,10 +280,12 @@ export const appRouter = router({
               const rawReply = data.choices?.[0]?.message?.content?.trim();
               if (rawReply) {
                 const reply = rawReply.replace(/\*\*/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
-                const topicImages = await topicImagesPromise;
+                const topicMedia = await topicMediaPromise;
+                const hasMedia = topicMedia.images.length > 0 || topicMedia.videos.length > 0 || topicMedia.socialMedia.length > 0;
                 return {
                   reply,
-                  ...(topicImages.length > 0 ? { topicImages } : {}),
+                  ...(hasMedia ? { topicMedia } : {}),
+                  ...(topicMedia.images.length > 0 ? { topicImages: topicMedia.images } : {}),
                   ...(liveNewsArticles ? { newsArticles: liveNewsArticles } : {}),
                   ...(sourceLinks ? { sourceLinks } : {}),
                 };
@@ -325,10 +329,12 @@ export const appRouter = router({
               const rawReply = data.choices?.[0]?.message?.content?.trim();
               if (rawReply) {
                 const reply = rawReply.replace(/\*\*/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
-                const topicImages = await topicImagesPromise;
+                const topicMedia = await topicMediaPromise;
+                const hasMedia = topicMedia.images.length > 0 || topicMedia.videos.length > 0 || topicMedia.socialMedia.length > 0;
                 return {
                   reply,
-                  ...(topicImages.length > 0 ? { topicImages } : {}),
+                  ...(hasMedia ? { topicMedia } : {}),
+                  ...(topicMedia.images.length > 0 ? { topicImages: topicMedia.images } : {}),
                   ...(liveNewsArticles ? { newsArticles: liveNewsArticles } : {}),
                   ...(sourceLinks ? { sourceLinks } : {}),
                 };
@@ -353,10 +359,12 @@ export const appRouter = router({
             reply: "I found a screen access, but I could not inspect its contents because the vision model did not respond. Please keep screen sharing enabled and try again.",
           };
         }
-        const topicImages = await topicImagesPromise;
+        const topicMedia = await topicMediaPromise;
+        const hasMedia = topicMedia.images.length > 0 || topicMedia.videos.length > 0 || topicMedia.socialMedia.length > 0;
         return {
           reply,
-          ...(topicImages.length > 0 ? { topicImages } : {}),
+          ...(hasMedia ? { topicMedia } : {}),
+          ...(topicMedia.images.length > 0 ? { topicImages: topicMedia.images } : {}),
           ...(liveNewsArticles ? { newsArticles: liveNewsArticles } : {}),
           ...(sourceLinks ? { sourceLinks } : {}),
         };
@@ -391,14 +399,41 @@ export const appRouter = router({
       }),
 
     resolveSharingLink: publicProcedure
-      .input(z.object({ token: z.string().min(40).max(100) }))
+      .input(z.object({ token: z.string().min(20).max(120) }))
       .query(async ({ input }) => {
         const person = await resolveTraceSharingToken(input.token);
         return person
           ? { person: { id: person.id, name: person.name, displayName: person.displayName, category: person.category, photoUrl: person.photoUrl } }
           : null;
       }),
+
+    updateLocation: publicProcedure
+      .input(
+        z.object({
+          token: z.string().min(20).max(120),
+          latitude: z.number().min(-90).max(90),
+          longitude: z.number().min(-180).max(180),
+          accuracy: z.number().optional(),
+          heading: z.number().optional(),
+          speed: z.number().optional(),
+          batteryLevel: z.number().optional(),
+        })
+      )
+      .mutation(async ({ input }) => {
+        const updated = await updateTracePersonLocation(input.token, {
+          latitude: input.latitude,
+          longitude: input.longitude,
+          accuracy: input.accuracy,
+          heading: input.heading,
+          speed: input.speed,
+          batteryLevel: input.batteryLevel,
+        });
+        return { success: true, personId: updated?.id ?? null } as const;
+      }),
   }),
+
+  man1: man1Router,
+  aiBuilder: aiBuilderRouter,
 });
 
 export type AppRouter = typeof appRouter;

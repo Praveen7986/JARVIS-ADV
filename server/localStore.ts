@@ -21,6 +21,14 @@ export type LocalPerson = {
   displayName: string | null;
   category: "family" | "friends" | "relatives" | "others";
   photoUrl: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  accuracy?: number | null;
+  heading?: number | null;
+  speed?: number | null;
+  batteryLevel?: number | null;
+  lastLocationAt?: string | null;
+  isLive?: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -113,6 +121,38 @@ export async function getLocalPersonByTokenHash(tokenHash: string) {
   const state = await readState();
   const link = state.sharingLinks.find((item) => item.tokenHash === tokenHash && item.revokedAt === null);
   return link ? state.people.find((person) => person.id === link.personId) ?? null : null;
+}
+
+export async function updateLocalPersonLocationByTokenHash(
+  tokenHash: string,
+  coords: {
+    latitude: number;
+    longitude: number;
+    accuracy?: number | null;
+    heading?: number | null;
+    speed?: number | null;
+    batteryLevel?: number | null;
+  }
+) {
+  const state = await readState();
+  const link = state.sharingLinks.find((item) => item.tokenHash === tokenHash && item.revokedAt === null);
+  if (!link) return null;
+  const person = state.people.find((p) => p.id === link.personId);
+  if (!person) return null;
+
+  const now = new Date().toISOString();
+  person.latitude = coords.latitude;
+  person.longitude = coords.longitude;
+  person.accuracy = coords.accuracy ?? null;
+  person.heading = coords.heading ?? null;
+  person.speed = coords.speed ?? null;
+  person.batteryLevel = coords.batteryLevel ?? null;
+  person.lastLocationAt = now;
+  person.isLive = true;
+  person.updatedAt = now;
+
+  await writeState(state);
+  return person;
 }
 
 export async function deleteLocalPerson(personId: number, ownerUserId: number) {
